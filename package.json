@@ -36,6 +36,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "generate:og": "node scripts/generate-og-image.mjs",
+    "prepare": "tsc && vite build",
     "typecheck": "tsc --noEmit",
     "typecheck:demo": "pnpm --filter orb-ui-demo typecheck",
     "typecheck:examples": "tsc -p tsconfig.type-tests.json --noEmit",
