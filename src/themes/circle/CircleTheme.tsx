@@ -8,6 +8,8 @@ interface CircleThemeProps extends OrbHtmlAttributes {
   state: OrbState
   volume: number
   size: number
+  /** Base fill color (hex). Overrides per-state greys when set. */
+  color?: string
   className?: string
   style?: CSSProperties
   disabled?: boolean
@@ -20,11 +22,8 @@ interface CircleThemeProps extends OrbHtmlAttributes {
 type RGB = [number, number, number]
 
 function hexToRgb(hex: string): RGB {
-  return [
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  ]
+  const h = hex.startsWith('#') ? hex.slice(1) : hex
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
 }
 
 const STATE_COLORS: Record<OrbState, string> = {
@@ -34,6 +33,12 @@ const STATE_COLORS: Record<OrbState, string> = {
   thinking: '#d8d8d8',
   speaking: '#e8e8e8',
   error: '#f87171',
+}
+
+function resolveColor(state: OrbState, color?: string): string {
+  if (state === 'error') return STATE_COLORS.error
+  if (color && /^#([A-Fa-f0-9]{6})$/i.test(color)) return color
+  return STATE_COLORS[state]
 }
 
 // ─── Keyframes ────────────────────────────────────────────────────────────────
@@ -73,6 +78,7 @@ export function CircleTheme({
   state,
   volume,
   size,
+  color,
   className,
   style,
   disabled = false,
@@ -96,7 +102,7 @@ export function CircleTheme({
   // (the adapter debounces these, but refs make the theme resilient regardless).
   const currentScaleRef = useRef(1)
   const currentGlowRef = useRef(0)
-  const currentColorRef = useRef<RGB>(hexToRgb(STATE_COLORS.idle))
+  const currentColorRef = useRef<RGB>(hexToRgb(resolveColor('idle', color)))
 
   // State transition blending — lerps base/range toward new state's targets
   // so size changes smoothly between states without affecting volume reactivity
@@ -149,7 +155,7 @@ export function CircleTheme({
 
         // Color: lerp toward state color (handles state transition fades;
         // avoids CSS transition flicker on rapid speaking↔listening changes)
-        const tRgb = hexToRgb(STATE_COLORS[state])
+        const tRgb = hexToRgb(resolveColor(state, color))
         const [cr, cg, cb] = currentColorRef.current
         currentColorRef.current = [
           cr + (tRgb[0] - cr) * 0.05,
@@ -186,7 +192,7 @@ export function CircleTheme({
       // off to CSS animations. This avoids a visible snap from listening's
       // compact base scale back to idle.
       cancelAnimationFrame(rafRef.current)
-      const c = STATE_COLORS[state] ?? STATE_COLORS.idle
+      const c = resolveColor(state, color)
       const tRgb = hexToRgb(c)
 
       const settle = () => {
@@ -247,7 +253,7 @@ export function CircleTheme({
 
       return () => cancelAnimationFrame(rafRef.current)
     }
-  }, [state])
+  }, [color, state])
 
   const d = size * 0.55
   const rootStyle: CSSProperties = {
@@ -313,7 +319,7 @@ export function CircleTheme({
           width: d,
           height: d,
           borderRadius: '50%',
-          background: STATE_COLORS[state],
+          background: resolveColor(state, color),
         }}
       />
     </span>

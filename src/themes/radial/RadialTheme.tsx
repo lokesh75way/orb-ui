@@ -7,6 +7,8 @@ interface RadialThemeProps extends OrbHtmlAttributes {
   state: OrbState
   volume: number
   size: number
+  /** Base tint for the radial shader (hex or css color). */
+  color?: string
   className?: string
   style?: OrbStyle
   disabled?: boolean
@@ -15,8 +17,52 @@ interface RadialThemeProps extends OrbHtmlAttributes {
 }
 
 interface RadialRenderer {
-  draw(time: number, rotation: number, listenEnergy: number, speakEnergy: number): void
+  draw(
+    time: number,
+    rotation: number,
+    listenEnergy: number,
+    speakEnergy: number,
+    baseColor: [number, number, number],
+  ): void
   destroy(): void
+}
+
+const DEFAULT_BASE_COLOR: [number, number, number] = [0.015, 0.34, 0.76]
+
+function clamp(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function damp(current: number, target: number, rate: number, deltaSeconds: number) {
+  return current + (target - current) * (1 - Math.exp(-rate * deltaSeconds))
+}
+
+function hexToRgb01(hex: string): [number, number, number] | null {
+  const match = /^#([A-Fa-f0-9]{6})$/.exec(hex.trim())
+  if (!match) return null
+  const n = parseInt(match[1], 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
+function cssColorToRgb01(value: string | undefined): [number, number, number] {
+  if (!value) return DEFAULT_BASE_COLOR
+  const fromHex = hexToRgb01(value)
+  if (fromHex) return fromHex
+
+  const rgb = /^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/i.exec(value)
+  if (rgb) {
+    return [
+      clamp(Number(rgb[1]) / 255),
+      clamp(Number(rgb[2]) / 255),
+      clamp(Number(rgb[3]) / 255),
+    ]
+  }
+
+  return DEFAULT_BASE_COLOR
+}
+
+function rgb01ToCss([r, g, b]: [number, number, number]) {
+  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
 }
 
 const VERTEX_SHADER = `
@@ -35,6 +81,7 @@ uniform float u_time;
 uniform float u_rotation;
 uniform float u_listen;
 uniform float u_speak;
+uniform vec3 u_base_color;
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution;
@@ -53,14 +100,14 @@ void main() {
   float phase =
     angle - 1.78 - u_rotation + angularWarp * warpStrength * (0.2 + radius * 0.8);
 
-  // Two opposing dark lobes and two opposing aqua lobes form the main pinwheel.
+  // Two opposing dark lobes and two opposing light lobes form the main pinwheel.
   float lobeField = cos(phase * 2.0);
   float darkMix = smoothstep(-0.04, 0.38, lobeField);
 
-  vec3 deepBlue = vec3(0.004, 0.105, 0.37);
-  vec3 cobalt = vec3(0.015, 0.34, 0.76);
-  vec3 aqua = vec3(0.24, 0.76, 0.79);
-  vec3 paleAqua = vec3(0.77, 0.96, 0.95);
+  vec3 deepBlue = mix(u_base_color, vec3(0.0, 0.02, 0.08), 0.55);
+  vec3 cobalt = u_base_color;
+  vec3 aqua = mix(u_base_color, vec3(0.55, 0.95, 0.95), 0.42);
+  vec3 paleAqua = mix(u_base_color, vec3(1.0), 0.72);
 
   float radialLight = 0.5 + 0.5 * sin(radius * 3.0 - u_time * 0.16);
   vec3 darkColor = mix(cobalt, deepBlue, 0.42 + 0.38 * radius);
@@ -69,14 +116,14 @@ void main() {
 
   vec3 lightColor = mix(paleAqua, aqua, 0.5 + 0.2 * sin(radius * 3.4 + phase * 2.0));
   float lightRay = pow(max(-lobeField, 0.0), 5.0);
-  lightColor = mix(lightColor, vec3(0.04, 0.42, 0.64), lightRay * 0.28);
+  lightColor = mix(lightColor, mix(u_base_color, vec3(0.0, 0.15, 0.25), 0.35), lightRay * 0.28);
 
   vec3 color = mix(lightColor, darkColor, darkMix);
 
   // Soft secondary streaks make each of the four lobes feel layered rather than flat.
   float secondaryRay = 0.5 + 0.5 * sin(phase * 6.0 + radius * 1.8 - u_time * 0.42);
   float rayStrength = (0.055 + u_speak * 0.045) * (0.25 + radius * 0.75);
-  color = mix(color, vec3(0.26, 0.76, 0.8), secondaryRay * rayStrength);
+  color = mix(color, aqua, secondaryRay * rayStrength);
 
   // The outer membrane keeps a circular perimeter while independent traveling waves
   // continuously reshape its inner boundary.
@@ -90,8 +137,8 @@ void main() {
   float rim = smoothstep(rimInner - 0.02, rimInner + 0.015, radius);
   float rimStrength = rim * (0.3 + u_listen * 0.3);
   vec3 membrane = mix(
-    vec3(0.47, 0.84, 0.84),
-    vec3(0.76, 0.93, 0.92),
+    mix(u_base_color, vec3(1.0), 0.45),
+    mix(u_base_color, vec3(1.0), 0.7),
     smoothstep(0.78, 1.0, radius)
   );
   color = mix(color, membrane, clamp(rimStrength, 0.0, 0.72));
@@ -119,14 +166,6 @@ const KEYFRAMES = `
 
 const ARTWORK_DIAMETER = 0.66
 const CONTROL_RATIO = 0.2
-
-function clamp(value: number, min = 0, max = 1) {
-  return Math.min(max, Math.max(min, value))
-}
-
-function damp(current: number, target: number, rate: number, deltaSeconds: number) {
-  return current + (target - current) * (1 - Math.exp(-rate * deltaSeconds))
-}
 
 function compileShader(
   gl: WebGLRenderingContext,
@@ -194,6 +233,7 @@ function createRadialRenderer(
   const rotationLocation = gl.getUniformLocation(program, 'u_rotation')
   const listenLocation = gl.getUniformLocation(program, 'u_listen')
   const speakLocation = gl.getUniformLocation(program, 'u_speak')
+  const baseColorLocation = gl.getUniformLocation(program, 'u_base_color')
 
   if (
     positionLocation < 0 ||
@@ -201,7 +241,8 @@ function createRadialRenderer(
     !timeLocation ||
     !rotationLocation ||
     !listenLocation ||
-    !speakLocation
+    !speakLocation ||
+    !baseColorLocation
   ) {
     gl.deleteProgram(program)
     gl.deleteBuffer(buffer)
@@ -226,13 +267,15 @@ function createRadialRenderer(
   gl.enableVertexAttribArray(positionLocation)
   gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0)
   gl.uniform2f(resolutionLocation, pixelSize, pixelSize)
+  gl.uniform3f(baseColorLocation, ...DEFAULT_BASE_COLOR)
 
   return {
-    draw(time, rotation, listenEnergy, speakEnergy) {
+    draw(time, rotation, listenEnergy, speakEnergy, baseColor) {
       gl.uniform1f(timeLocation, time)
       gl.uniform1f(rotationLocation, rotation)
       gl.uniform1f(listenLocation, listenEnergy)
       gl.uniform1f(speakLocation, speakEnergy)
+      gl.uniform3f(baseColorLocation, baseColor[0], baseColor[1], baseColor[2])
       gl.drawArrays(gl.TRIANGLES, 0, 6)
     },
     destroy() {
@@ -275,6 +318,7 @@ export function RadialTheme({
   state,
   volume,
   size,
+  color,
   className,
   style,
   disabled = false,
@@ -286,11 +330,16 @@ export function RadialTheme({
   const stateRef = useRef(state)
   const volumeRef = useRef(volume)
   const reducedMotionRef = useRef(false)
+  const baseColorRef = useRef<[number, number, number]>(DEFAULT_BASE_COLOR)
+
+  const baseColor = cssColorToRgb01(color)
+  const baseColorCss = rgb01ToCss(baseColor)
 
   useIsomorphicLayoutEffect(() => {
     stateRef.current = state
     volumeRef.current = volume
-  }, [state, volume])
+    baseColorRef.current = baseColor
+  }, [baseColor, state, volume])
 
   const diameter = size * ARTWORK_DIAMETER
   const controlSize = diameter * CONTROL_RATIO
@@ -413,7 +462,7 @@ export function RadialTheme({
         rotation += rotationVelocity * deltaSeconds
       }
 
-      renderer?.draw(motionTime, rotation, listenEnergy, speakEnergy)
+      renderer?.draw(motionTime, rotation, listenEnergy, speakEnergy, baseColorRef.current)
       frame = requestAnimationFrame(render)
     }
 
@@ -429,6 +478,17 @@ export function RadialTheme({
   const active = isActiveState(state)
   const connecting = state === 'connecting'
   const stackHeight = diameter + (interactive ? controlSize * 0.5 : 0)
+  const [br, bg, bb] = baseColor
+  const mid = rgb01ToCss([
+    br + (1 - br) * 0.35,
+    bg + (1 - bg) * 0.45,
+    bb + (1 - bb) * 0.5,
+  ])
+  const light = rgb01ToCss([
+    br + (1 - br) * 0.72,
+    bg + (1 - bg) * 0.78,
+    bb + (1 - bb) * 0.78,
+  ])
   const rootStyle: OrbStyle = {
     '--orb-ui-radial-control-surround': '#fff',
     width: size,
@@ -453,8 +513,7 @@ export function RadialTheme({
         width: diameter,
         height: diameter,
         borderRadius: '50%',
-        background:
-          'conic-gradient(from 12deg, #06358d 0deg, #0b65b5 72deg, #c7f1ef 92deg, #45c2c8 172deg, #06358d 196deg, #0b65b5 254deg, #c7f1ef 278deg, #45c2c8 360deg)',
+        background: `conic-gradient(from 12deg, ${baseColorCss} 0deg, ${mid} 72deg, ${light} 92deg, ${mid} 172deg, ${baseColorCss} 196deg, ${mid} 254deg, ${light} 278deg, ${mid} 360deg)`,
       }}
     />
   )

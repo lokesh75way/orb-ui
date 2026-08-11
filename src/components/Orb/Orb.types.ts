@@ -79,6 +79,12 @@ export interface OrbProps extends OrbHtmlAttributes {
   /** Size in pixels. Defaults to 200. */
   size?: number
 
+  /**
+   * Base tint for themes that support it (`circle`, `bars`, `cloud`, `radial`).
+   * Accepts hex (`#354DE4`) or any CSS color string (cloud/radial).
+   */
+  color?: string
+
   /** Optional class name for the rendered orb container/control. */
   className?: string
 

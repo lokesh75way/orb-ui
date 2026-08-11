@@ -6,6 +6,8 @@ interface BarsThemeProps extends OrbHtmlAttributes {
   state: OrbState
   volume: number
   size: number
+  /** Base bar color (hex). Overrides per-state greys when set. */
+  color?: string
   className?: string
   style?: CSSProperties
   disabled?: boolean
@@ -30,17 +32,21 @@ const STATE_COLORS: Record<string, string> = {
 }
 
 function hexToRgb(hex: string): [number, number, number] {
-  return [
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  ]
+  const h = hex.startsWith('#') ? hex.slice(1) : hex
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+}
+
+function resolveColor(state: string, color?: string): string {
+  if (state === 'error') return STATE_COLORS.error
+  if (color && /^#([A-Fa-f0-9]{6})$/i.test(color)) return color
+  return STATE_COLORS[state] ?? STATE_COLORS.idle
 }
 
 export function BarsTheme({
   state,
   volume,
   size,
+  color,
   className,
   style,
   disabled = false,
@@ -55,7 +61,9 @@ export function BarsTheme({
   const volumeRef = useRef(volume)
   const hoveredRef = useRef(false)
   const hoverBoostRef = useRef(0)
-  const currentColorRef = useRef<[number, number, number]>(hexToRgb(STATE_COLORS.idle))
+  const currentColorRef = useRef<[number, number, number]>(
+    hexToRgb(resolveColor('idle', color)),
+  )
 
   // State transition: blend targets over BLEND_MS so bar heights don't jump
   const BLEND_MS = 300
@@ -80,7 +88,7 @@ export function BarsTheme({
     const maxH = size * 0.55
     const minH = size * 0.06
 
-    const color = STATE_COLORS[state] ?? STATE_COLORS.idle
+    const barColor = resolveColor(state, color)
 
     const hoverBoostMax = size * 0.1
     // Diamond shape: center bar gets full boost, outer bars get less
@@ -150,7 +158,7 @@ export function BarsTheme({
           smoothed.current[i] += (targetH - smoothed.current[i]) * rate
         }
 
-        setBars(smoothed.current, color)
+        setBars(smoothed.current, barColor)
         rafRef.current = requestAnimationFrame(animate)
       }
       rafRef.current = requestAnimationFrame(animate)
@@ -172,7 +180,7 @@ export function BarsTheme({
           // Lerp from current height into wave for smooth transition from hover
           smoothed.current[i] += (targetH - smoothed.current[i]) * 0.15
         }
-        setBars(smoothed.current, color)
+        setBars(smoothed.current, barColor)
         rafRef.current = requestAnimationFrame(animate)
       }
       rafRef.current = requestAnimationFrame(animate)
@@ -186,16 +194,16 @@ export function BarsTheme({
       for (let i = 0; i < BAR_COUNT; i++) {
         smoothed.current[i] += (minH - smoothed.current[i]) * 0.16
       }
-      setBars(smoothed.current, color)
+      setBars(smoothed.current, barColor)
       rafRef.current = requestAnimationFrame(animateStatic)
     }
     rafRef.current = requestAnimationFrame(animateStatic)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [state, size])
+  }, [color, disabled, interactive, size, state])
 
   const barW = size * 0.055
   const gap = size * 0.035
-  const radius = size * 0.03
+  const radius = Math.max(2, barW / 2)
   const maxH = size * 0.55
   const minH = size * 0.06
   const rootStyle: CSSProperties = {
@@ -246,7 +254,7 @@ export function BarsTheme({
             maxHeight: maxH,
             height: minH,
             borderRadius: radius,
-            background: STATE_COLORS[state] ?? STATE_COLORS.idle,
+            background: resolveColor(state, color),
           }}
         />
       ))}

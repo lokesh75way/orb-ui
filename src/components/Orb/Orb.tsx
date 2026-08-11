@@ -14,6 +14,7 @@ export function Orb({
   adapter,
   theme = 'debug',
   size = 200,
+  color,
   className,
   style,
   disabled = false,
@@ -79,13 +80,13 @@ export function Orb({
 
   switch (theme) {
     case 'circle':
-      return <CircleTheme {...interactiveThemeProps} onClick={clickHandler} />
+      return <CircleTheme {...interactiveThemeProps} color={color} onClick={clickHandler} />
     case 'bars':
-      return <BarsTheme {...interactiveThemeProps} onClick={clickHandler} />
+      return <BarsTheme {...interactiveThemeProps} color={color} onClick={clickHandler} />
     case 'cloud':
-      return <CloudTheme {...interactiveThemeProps} onClick={clickHandler} />
+      return <CloudTheme {...interactiveThemeProps} color={color} onClick={clickHandler} />
     case 'radial':
-      return <RadialTheme {...interactiveThemeProps} onClick={clickHandler} />
+      return <RadialTheme {...interactiveThemeProps} color={color} onClick={clickHandler} />
     case 'debug':
     default:
       return (

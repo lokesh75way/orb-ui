@@ -8,6 +8,7 @@ interface CloudThemeProps extends OrbHtmlAttributes {
   state: OrbState
   volume: number
   size: number
+  color?: string
   className?: string
   style?: CSSProperties
   disabled?: boolean
@@ -16,8 +17,42 @@ interface CloudThemeProps extends OrbHtmlAttributes {
 }
 
 interface CloudRenderer {
-  draw(time: number, activity: number): void
+  draw(time: number, activity: number, baseColor: [number, number, number]): void
   destroy(): void
+}
+
+const DEFAULT_BASE_COLOR: [number, number, number] = [0.36, 0.39, 0.985]
+
+function clamp(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function hexToRgb01(hex: string): [number, number, number] | null {
+  const match = /^#([A-Fa-f0-9]{6})$/.exec(hex.trim())
+  if (!match) return null
+  const n = parseInt(match[1], 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
+function cssColorToRgb01(value: string | undefined): [number, number, number] {
+  if (!value) return DEFAULT_BASE_COLOR
+  const fromHex = hexToRgb01(value)
+  if (fromHex) return fromHex
+
+  const rgb = /^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/i.exec(value)
+  if (rgb) {
+    return [
+      clamp(Number(rgb[1]) / 255),
+      clamp(Number(rgb[2]) / 255),
+      clamp(Number(rgb[3]) / 255),
+    ]
+  }
+
+  return DEFAULT_BASE_COLOR
+}
+
+function rgb01ToCss([r, g, b]: [number, number, number]) {
+  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
 }
 
 const VERTEX_SHADER = `
@@ -34,6 +69,7 @@ precision highp float;
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_activity;
+uniform vec3 u_base_color;
 
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -102,10 +138,10 @@ void main() {
   float band = exp(-pow((uv.y - horizon) * (5.2 + u_activity * 0.8), 2.0));
   float cloud = smoothstep(0.24, 0.79, field);
 
-  vec3 deepPeriwinkle = vec3(0.36, 0.39, 0.985);
-  vec3 upperPeriwinkle = vec3(0.48, 0.56, 0.985);
-  vec3 lowerLavender = vec3(0.72, 0.78, 0.975);
-  vec3 milk = vec3(0.89, 0.92, 0.995);
+  vec3 deepPeriwinkle = mix(u_base_color, vec3(0.08, 0.08, 0.2), 0.18);
+  vec3 upperPeriwinkle = mix(u_base_color, vec3(1.0), 0.18);
+  vec3 lowerLavender = mix(u_base_color, vec3(1.0), 0.52);
+  vec3 milk = mix(u_base_color, vec3(1.0), 0.82);
 
   vec3 color = mix(lowerLavender, upperPeriwinkle, upper);
   float upperDepth = upper * (0.14 + smoothstep(0.42, 0.78, folded) * 0.5);
@@ -128,7 +164,6 @@ const NEUTRAL_DIAMETER = 0.55
 const LISTEN_SHRINK = 0.204
 const SPEAK_GROW = 0.2145
 const DOT_SCALE = 0.063
-const LAUNCH_DOT_COLOR = '#5659dc'
 const ENTRANCE_OVERSHOOT = 1.178
 const DOT_HOLD_MS = 180
 const GROW_MS = 300
@@ -137,10 +172,6 @@ const SURFACE_FADE_START_MS = DOT_HOLD_MS + GROW_MS * 0.22
 const SURFACE_FADE_END_MS = DOT_HOLD_MS + GROW_MS * 0.8
 const DOT_FADE_START_MS = DOT_HOLD_MS + GROW_MS * 0.58
 const DOT_FADE_END_MS = DOT_HOLD_MS + GROW_MS
-
-function clamp(value: number, min = 0, max = 1) {
-  return Math.min(max, Math.max(min, value))
-}
 
 function damp(current: number, target: number, rate: number, deltaSeconds: number) {
   return current + (target - current) * (1 - Math.exp(-rate * deltaSeconds))
@@ -227,7 +258,14 @@ function createCloudRenderer(
   const resolutionLocation = gl.getUniformLocation(program, 'u_resolution')
   const timeLocation = gl.getUniformLocation(program, 'u_time')
   const activityLocation = gl.getUniformLocation(program, 'u_activity')
-  if (positionLocation < 0 || !resolutionLocation || !timeLocation || !activityLocation) {
+  const baseColorLocation = gl.getUniformLocation(program, 'u_base_color')
+  if (
+    positionLocation < 0 ||
+    !resolutionLocation ||
+    !timeLocation ||
+    !activityLocation ||
+    !baseColorLocation
+  ) {
     gl.deleteProgram(program)
     gl.deleteBuffer(buffer)
     gl.deleteShader(vertexShader)
@@ -251,11 +289,13 @@ function createCloudRenderer(
   gl.enableVertexAttribArray(positionLocation)
   gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0)
   gl.uniform2f(resolutionLocation, pixelSize, pixelSize)
+  gl.uniform3f(baseColorLocation, ...DEFAULT_BASE_COLOR)
 
   return {
-    draw(time, activity) {
+    draw(time, activity, baseColor) {
       gl.uniform1f(timeLocation, time)
       gl.uniform1f(activityLocation, activity)
+      gl.uniform3f(baseColorLocation, baseColor[0], baseColor[1], baseColor[2])
       gl.drawArrays(gl.TRIANGLES, 0, 6)
     },
     destroy() {
@@ -286,6 +326,7 @@ export function CloudTheme({
   state,
   volume,
   size,
+  color,
   className,
   style,
   disabled = false,
@@ -300,12 +341,19 @@ export function CloudTheme({
   const volumeRef = useRef(volume)
   const interactiveRef = useRef(interactive)
   const reducedMotionRef = useRef(false)
+  const baseColorRef = useRef<[number, number, number]>(DEFAULT_BASE_COLOR)
+
+  const colorInput =
+    color ?? (typeof style?.color === 'string' ? style.color : undefined)
+  const baseColor = cssColorToRgb01(colorInput)
+  const baseColorCss = rgb01ToCss(baseColor)
 
   useIsomorphicLayoutEffect(() => {
     stateRef.current = state
     volumeRef.current = volume
     interactiveRef.current = interactive
-  }, [interactive, state, volume])
+    baseColorRef.current = baseColor
+  }, [baseColor, interactive, state, volume])
 
   const diameter = size * NEUTRAL_DIAMETER
 
@@ -324,8 +372,14 @@ export function CloudTheme({
 
     const renderer = createCloudRenderer(canvas, diameter)
     if (!renderer) {
-      canvas.style.background =
-        'linear-gradient(180deg, #626afb 2%, #8f9dfb 32%, #dde6fd 52%, #c9d3fb 84%)'
+      const [r, g, b] = baseColorRef.current
+      const mid = rgb01ToCss([
+        mix(r, 1, 0.25),
+        mix(g, 1, 0.25),
+        mix(b, 1, 0.25),
+      ])
+      const light = rgb01ToCss([mix(r, 1, 0.7), mix(g, 1, 0.7), mix(b, 1, 0.7)])
+      canvas.style.background = `linear-gradient(180deg, ${baseColorCss} 2%, ${mid} 32%, ${light} 52%, ${mid} 84%)`
     }
 
     let frame = 0
@@ -345,6 +399,7 @@ export function CloudTheme({
 
       const nextState = stateRef.current
       const reducedMotion = reducedMotionRef.current
+      const color = baseColorRef.current
 
       if (nextState !== previousState) {
         if (isVisibleState(nextState) && !isVisibleState(previousState)) entranceStarted = now
@@ -399,6 +454,11 @@ export function CloudTheme({
         ? spinnerTarget
         : damp(currentSpinnerOpacity, spinnerTarget, 18, deltaSeconds)
 
+      const colorCss = rgb01ToCss(color)
+      launchDot.style.background = colorCss
+      spinner.style.borderColor = `rgba(${Math.round(color[0] * 255)}, ${Math.round(color[1] * 255)}, ${Math.round(color[2] * 255)}, 0.24)`
+      spinner.style.borderTopColor = colorCss
+
       canvas.style.opacity = String(currentOpacity * surfaceMix)
       canvas.style.transform = `scale(${scale})`
       launchDot.style.opacity = String(launchDotOpacity)
@@ -417,7 +477,7 @@ export function CloudTheme({
       }
 
       if (!reducedMotion) flowTime += deltaSeconds * speed
-      renderer?.draw(flowTime, activity)
+      renderer?.draw(flowTime, activity, color)
 
       frame = requestAnimationFrame(render)
     }
@@ -429,7 +489,7 @@ export function CloudTheme({
       motionQuery.removeEventListener('change', updateReducedMotion)
       renderer?.destroy()
     }
-  }, [diameter])
+  }, [baseColorCss, diameter])
 
   const rootStyle: CSSProperties = {
     width: size,
@@ -462,7 +522,7 @@ export function CloudTheme({
           inset: 0,
           display: 'block',
           borderRadius: '50%',
-          background: LAUNCH_DOT_COLOR,
+          background: baseColorCss,
           opacity: 0,
           transform: `scale(${DOT_SCALE})`,
           transformOrigin: 'center',
@@ -495,9 +555,9 @@ export function CloudTheme({
           width: diameter * 0.105,
           height: diameter * 0.105,
           boxSizing: 'border-box',
-          border: `${Math.max(1.5, diameter * 0.012)}px solid rgba(113, 120, 245, 0.24)`,
-          borderTopColor: '#777ff6',
-          borderRightColor: '#777ff6',
+          border: `${Math.max(1.5, diameter * 0.012)}px solid rgba(${Math.round(baseColor[0] * 255)}, ${Math.round(baseColor[1] * 255)}, ${Math.round(baseColor[2] * 255)}, 0.24)`,
+          borderTopColor: baseColorCss,
+          borderRightColor: baseColorCss,
           borderRadius: '50%',
           opacity: 0,
           transform: 'rotate(0deg)',
